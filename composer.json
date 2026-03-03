@@ -1,0 +1,20 @@
+{
+    "name": "efimov-it/alfa-id-php-sdk",
+    "description": "Lightweight PHP SDK for Alfa ID integration",
+    "type": "library",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "AlfaId\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "Petr Efimov",
+            "email": "feedback@efimov-it.info"
+        }
+    ],
+    "require": {
+        "php": "^8.2"
+    }
+}
