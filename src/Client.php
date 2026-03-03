@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 namespace AlfaID;
 
-use AccessToken;
+use AlfaID\DTO\AccessToken;
 use AlfaID\DTO\AlfaUser;
 use AlfaID\DTO\AuthCode;
 
@@ -20,7 +20,7 @@ final class Client {
         $this->sandbox = $sandbox;
     }
 
-    public function getLinkForAuth (string $state, string $scope = "openid", ?string $redirect_uri): string {
+    public function getLinkForAuth (string $state, string $scope = "openid", ?string $redirect_uri = null): string {
         $host = $this->sandbox ? "https://id-sandbox.alfabank.ru" : "https://id.alfabank.ru";
         $uri = $redirect_uri ?: $this->default_redirect_uri;
         return $host . "/oidc/authorize?response_type=code&client_id=$this->client_id&redirect_uri=$uri&scope=$scope&state=$state";
