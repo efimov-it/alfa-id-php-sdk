@@ -3,20 +3,23 @@ declare(strict_types=1);
 
 namespace AlfaID;
 
-use AlfaID\DTO\AccessToken;
-use AlfaID\DTO\AlfaUser;
-use AlfaID\DTO\AuthCode;
+use AlfaID\Domain\DTO\AccessToken;
+use AlfaID\Domain\DTO\AlfaUser;
+use AlfaID\Domain\DTO\AuthCode;
+use AlfaID\Infrastructure\Http\Tls\CertificateBundle;
 
 final class Client {
     private string $client_id;
     private string $client_secret;
     private string $default_redirect_uri;
+    private CertificateBundle $certificate;
     private bool $sandbox;
 
-    public function __construct(string $client_id, string $client_secret, string $default_redirect_uri, bool $sandbox = true) {
+    public function __construct(string $client_id, string $client_secret, string $default_redirect_uri, CertificateBundle $certificate, bool $sandbox = true) {
         $this->client_id = $client_id;
         $this->client_secret = $client_secret;
         $this->default_redirect_uri = $default_redirect_uri;
+        $this->certificate = $certificate;
         $this->sandbox = $sandbox;
     }
 

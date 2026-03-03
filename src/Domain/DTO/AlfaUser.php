@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-namespace AlfaID\DTO;
+namespace AlfaID\Domain\DTO;
 
 final class AlfaUser {
     public function __construct(
