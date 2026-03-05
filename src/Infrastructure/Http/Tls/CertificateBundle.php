@@ -4,27 +4,30 @@ declare(strict_types=1);
 namespace AlfaID\Infrastructure\Http\Tls;
 
 final class CertificateBundle {
-    public readonly string $cert_file_path;
-    public readonly string $cert_secret_file_path;
-    public readonly string $cert_chain_file_path;
+    public readonly string $file_path;
+    public readonly string $secret_file_path;
+    public readonly ?string $pass;
+    public readonly ?string $chain_file_path;
 
     private function __construct(
-        string $cert_file_path,
-        string $cert_secret_file_path,
-        string $cert_chain_file_path
+        string $file_path,
+        string $secret_file_path,
+        ?string $chain_file_path = null,
+        ?string $pass = null
     ) {
-        $this->cert_file_path = $cert_file_path;
-        $this->cert_secret_file_path = $cert_secret_file_path;
-        $this->cert_chain_file_path = $cert_chain_file_path;
+        $this->file_path = $file_path;
+        $this->secret_file_path = $secret_file_path;
+        $this->chain_file_path = $chain_file_path;
+        $this->pass = $pass;
     }
 
-    public static function load (string $cert_file_path, string $cert_secret_file_path, string $cert_chain_file_path):?self {
+    public static function load (string $file_path, string $secret_file_path, ?string $chain_file_path = null, ?string $pass = null):?self {
         if (
-            is_file($cert_file_path) && is_readable($cert_file_path) &&
-            is_file($cert_secret_file_path) && is_readable($cert_secret_file_path) &&
-            is_file($cert_chain_file_path) && is_readable($cert_chain_file_path)
+            is_file($file_path) && is_readable($file_path) &&
+            is_file($secret_file_path) && is_readable($secret_file_path) &&
+            (!$chain_file_path || (is_file($chain_file_path) && is_readable($chain_file_path)))
         ) {
-            return new self($cert_file_path, $cert_secret_file_path, $cert_chain_file_path);
+            return new self($file_path, $secret_file_path, $chain_file_path, $pass);
         }
 
         return null;
