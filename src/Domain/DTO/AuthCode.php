@@ -5,7 +5,8 @@ namespace AlfaID\Domain\DTO;
 
 final class AuthCode {
     public function __construct(
-        public string $code,
-        public string $state
+        public readonly string $state,
+        public readonly ?string $code = null,
+        public readonly ?string $error = null
     ){}
 }
