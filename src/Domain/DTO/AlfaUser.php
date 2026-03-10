@@ -8,12 +8,12 @@ final class AlfaUser {
         public string $name, // given_name
         public string $surname, // family_name
         public ?string $midname, // middle_name
-        public string $email, // email
-        public string $gender, // gender
-        public string $bdate, // birthdate
+        public ?string $email, // email
+        public ?string $gender, // gender
+        public ?string $bdate, // birthdate
         public string $phone, // phone_number
-        public string $citizenship, // citizenship
-        public string $package_name, // package_name
-        public string $package_code // package_code
+        public ?string $citizenship, // citizenship
+        public ?string $package_name, // package_name
+        public ?string $package_code // package_code
     ) {}
 }
