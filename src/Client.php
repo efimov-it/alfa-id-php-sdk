@@ -29,8 +29,6 @@ final class Client {
         }
         else {
             $this->client_secret = self::getSecret($client_id, $certificate, $sandbox);
-
-            var_dump($this->client_secret);
         }
     }
 
@@ -39,11 +37,19 @@ final class Client {
                     "https://id-sandbox.alfabank.ru" :
                     "https://id.alfabank.ru";
 
-        $uri = $redirect_uri ?: $this->default_redirect_uri;
+        $params = [
+            "response_type" => "code",
+            "client_id"     => $this->client_id,
+            "redirect_uri"  => $redirect_uri ?: $this->default_redirect_uri,
+            "scope"         => $scope,
+            "state"         => $state
+        ];
 
-        $consent = $reset_consent ? "&prompt=consent" : "";
+        if ($reset_consent) $params["prompt"] = "consent";
 
-        return $host . "/oidc/authorize?response_type=code&client_id=$this->client_id&redirect_uri=$uri&scope=$scope&state=$state" . $consent;
+        $query = http_build_query($params, "", null, PHP_QUERY_RFC3986);
+
+        return $host . "/oidc/authorize?" . $query;
     }
 
     private static function getSecret (string $client_id, CertificateBundle $cert, bool $sandbox):?string {
@@ -55,11 +61,16 @@ final class Client {
 
         if ($req->error || $req->code !== 200 || !$req->data) return null;
 
-        $data = json_decode($req->data);
+        try {
+            $data = json_decode($req->data, null, 512, JSON_THROW_ON_ERROR);
 
-        if (isset($data->clientSecret)) return $data->clientSecret;
+            if (isset($data->clientSecret)) return $data->clientSecret;
 
-        return null;
+            return null;
+        }
+        catch (Exception $e) {
+            return null;
+        }
     }
 
     public function processAuthCode ():?AuthCode {
@@ -87,17 +98,21 @@ final class Client {
     }
 
     public function getToken (AuthCode $code, ?string $redirect_uri = null):?AccessToken {
+        if ($code->error) return null;
+
         $host = $this->sandbox ?
                     "https://sandbox.alfabank.ru/oidc/token" :
                     "https://baas.alfabank.ru/oidc/token";
 
         $uri = $redirect_uri ?? $this->default_redirect_uri;
 
-        $body = "grant_type=authorization_code".
-               "&code=$code->code".
-               "&client_id=$this->client_id".
-               "&client_secret=$this->client_secret".
-               "&redirect_uri=$uri";
+        $body = http_build_query([
+            "grant_type" => "authorization_code",
+            "code" => $code->code,
+            "client_id" => $this->client_id,
+            "client_secret" => $this->client_secret,
+            "redirect_uri" => $uri
+        ]);
 
         $req = self::sendRequest($host, "POST", $this->certificate, $body, [
             'Content-Type: application/x-www-form-urlencoded',
@@ -107,14 +122,14 @@ final class Client {
         if ($req->error || $req->code !== 200 || !$req->data) return null;
 
         try {
-            $res = json_decode($req->data);
+            $res = json_decode($req->data, null, 512, JSON_THROW_ON_ERROR);
 
             if (
-                $res->access_token &&
-                $res->refresh_token &&
-                $res->token_type &&
-                $res->expires_in &&
-                $res->id_token
+                isset($res->access_token) &&
+                isset($res->refresh_token) &&
+                isset($res->token_type) &&
+                isset($res->expires_in) &&
+                isset($res->id_token)
             ) {
                 return new AccessToken(
                     $res->access_token,
@@ -124,28 +139,56 @@ final class Client {
                     $res->id_token
                 );
             }
+
+            return null;
         }
         catch (Exception $e) {
             return null;
         }
-
-        return null;
     }
 
-    public function refreshToken (AccessToken $token):AccessToken|bool {
+    public function refreshToken (AccessToken $token):?AccessToken {
         $host = $this->sandbox ?
                     "https://sandbox.alfabank.ru/oidc/token" :
                     "https://baas.alfabank.ru/oidc/token";
 
-        return false;
+        $body = http_build_query([
+            "grant_type" => "refresh_token",
+            "refresh_token" => $token->refresh_token,
+            "client_id" => $this->client_id,
+            "client_secret" => $this->client_secret
+        ]);
 
-        return new AccessToken(
-            "access_token",
-            "refresh_token",
-            "Bearer",
-            3600,
-            "id_token"
-        );
+        $req = self::sendRequest($host, "POST", $this->certificate, $body, [
+            'Content-Type: application/x-www-form-urlencoded',
+            'Accept: application/json'
+        ]);
+
+        if ($req->error || $req->code !== 200 || !$req->data) return null;
+
+        try {
+            $res = json_decode($req->data, null, 512, JSON_THROW_ON_ERROR);
+
+            if (
+                isset($res->access_token) &&
+                isset($res->refresh_token) &&
+                isset($res->token_type) &&
+                isset($res->expires_in)
+            ) {
+                return new AccessToken(
+                    $res->access_token,
+                    $res->refresh_token,
+                    $res->token_type,
+                    time() + $res->expires_in,
+                    $token->id_token
+                );
+            }
+
+            return null;
+        }
+        catch (Exception $e) {
+            return null;
+        }
     }
 
     public function getUserInfo (AccessToken $token):AlfaUser|null {
@@ -169,7 +212,15 @@ final class Client {
             $decodedData = base64_decode($decodedData, true);
             if ($decodedData === false) return null;
             
-            $userData = json_decode($decodedData);
+            $userData = json_decode($decodedData, null, 512, JSON_THROW_ON_ERROR);
+
+            if (
+                !isset($userData->given_name) ||
+                !isset($userData->family_name) ||
+                !isset($userData->phone_number)
+            ) {
+                return null;
+            }
 
             return new AlfaUser(
                 $userData->given_name,
@@ -194,14 +245,19 @@ final class Client {
         string $method = "GET",
         ?CertificateBundle $certificate = null,
         $body = null,
-        ?array $headers = null
+        ?array $headers = null,
+        int $timeout = 10
     ):ApiResponseWrapper {
         $ch = curl_init($host);
+
+        if ($ch === false) return new ApiResponseWrapper(0, null, "cURL init error");
 
         $method_normalized = strtoupper($method);
 
         $curl_opt = [
             CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => $timeout,
+            CURLOPT_TIMEOUT        => $timeout
         ];
 
         if ($headers) $curl_opt[CURLOPT_HTTPHEADER] = $headers;
@@ -233,6 +289,11 @@ final class Client {
         $code = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
         curl_close($ch);
 
-        return new ApiResponseWrapper($code, $res ?? null, ($err !== '') ? $err : null, $errno);
+        return new ApiResponseWrapper(
+            $code,
+            $res === false ? null : $res,
+            $err !== '' ? $err : null,
+            $errno
+        );
     }
 }
