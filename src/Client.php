@@ -10,6 +10,8 @@ use AlfaID\Domain\DTO\AuthCode;
 use AlfaID\Infrastructure\Http\Tls\CertificateBundle;
 
 use Exception;
+use JsonException;
+use RuntimeException;
 
 final class Client {
     private string $client_id;
@@ -52,25 +54,34 @@ final class Client {
         return $host . "/oidc/authorize?" . $query;
     }
 
-    private static function getSecret (string $client_id, CertificateBundle $cert, bool $sandbox):?string {
+    private static function getSecret (string $client_id, CertificateBundle $cert, bool $sandbox):string {
+        $client_id_url = rawurlencode($client_id);
         $host = $sandbox ?
-                    "https://sandbox.alfabank.ru/oidc/clients/$client_id/client-secret" :
-                    "https://baas.alfabank.ru/oidc/clients/$client_id/client-secret";
+                    "https://sandbox.alfabank.ru/oidc/clients/$client_id_url/client-secret" :
+                    "https://baas.alfabank.ru/oidc/clients/$client_id_url/client-secret";
 
-        $req = self::sendRequest($host, "POST", $cert, null, ['accept: application/json']);
+        $response = self::sendRequest($host, "POST", $cert, null, ['Accept: application/json']);
 
-        if ($req->error || $req->code !== 200 || !$req->data) return null;
+        if ($response->error || $response->code !== 200) {
+            throw new RuntimeException("Can't get the client's secret: HTTP {$response->code}" . ($response->error ? " ({$response->error})" : ''), $response->code);
+        }
+
+        if ($response->data === null || $response->data === '') {
+            throw new RuntimeException("Can't get the client's secret: empty response");
+        }
 
         try {
-            $data = json_decode($req->data, null, 512, JSON_THROW_ON_ERROR);
-
-            if (isset($data->clientSecret)) return $data->clientSecret;
-
-            return null;
+            $data = json_decode($response->data, flags: JSON_THROW_ON_ERROR);
         }
-        catch (Exception $e) {
-            return null;
+        catch (JsonException $e) {
+            throw new RuntimeException("Can't get the client's secret: invalid JSON response", 0, $e);
         }
+
+        if (!is_object($data) || !isset($data->clientSecret) || !is_string($data->clientSecret) || trim($data->clientSecret) === '') {
+            throw new RuntimeException("Can't get the client's secret: invalid response structure");
+        }
+
+        return $data->clientSecret;
     }
 
     public function processAuthCode ():?AuthCode {
