@@ -49,7 +49,7 @@ final class Client {
 
         if ($reset_consent) $params["prompt"] = "consent";
 
-        $query = http_build_query($params, "", null, PHP_QUERY_RFC3986);
+        $query = http_build_query($params, encoding_type: PHP_QUERY_RFC3986);
 
         return $host . "/oidc/authorize?" . $query;
     }
@@ -84,7 +84,7 @@ final class Client {
         return $data->clientSecret;
     }
 
-    public function processAuthCode ():?AuthCode {
+    public function processAuthCode ():AuthCode {
         $code  = filter_input(INPUT_GET, 'code',  FILTER_UNSAFE_RAW, FILTER_FLAG_STRIP_LOW);
         $error = filter_input(INPUT_GET, 'error', FILTER_UNSAFE_RAW, FILTER_FLAG_STRIP_LOW);
         $state = filter_input(INPUT_GET, 'state', FILTER_UNSAFE_RAW, FILTER_FLAG_STRIP_LOW);
@@ -93,17 +93,45 @@ final class Client {
         $error = is_string($error) ? trim($error) : null;
         $state = is_string($state) ? trim($state) : null;
 
-        if ($code !== null  && strlen($code)  > 2048) return null;
-        if ($error !== null && strlen($error) > 256)  return null;
-        if ($state === null || strlen($state) > 256)  return null;
+        $code  = $code === ''  ? null : $code;
+        $error = $error === '' ? null : $error;
+        $state = $state === '' ? null : $state;
 
-        if (!preg_match('/^[A-Za-z0-9\-_]{1,40}$/', $state)) return null;
+        if ($code !== null  && strlen($code)  > 64) {
+            throw new RuntimeException("Failed to process auth code: code value is too long");
+        }
 
-        if ($code !== null && !preg_match('/^[A-Za-z0-9\-_]{1,40}$/', $code)) return null;
+        if ($error !== null && strlen($error) > 64) {
+            throw new RuntimeException("Failed to process auth code: error value is too long");
+        }
 
-        if ($error !== null && !preg_match('/^[A-Za-z0-9_\-\.]{1,256}$/', $error)) return null;
+        if ($state === null) {
+            throw new RuntimeException("Failed to process auth code: state is missing");
+        }
 
-        if ($code === null && $error === null) return null;
+        if (strlen($state) > 64) {
+            throw new RuntimeException("Failed to process auth code: state value is too long");
+        }
+
+        if (!preg_match('/^[A-Za-z0-9_-]{1,64}$/', $state)) {
+            throw new RuntimeException("Failed to process auth code: state value is invalid");
+        }
+
+        if ($code !== null && !preg_match('/^[A-Za-z0-9_-]{1,64}$/', $code)) {
+            throw new RuntimeException("Failed to process auth code: code value is invalid");
+        }
+
+        if ($error !== null && !preg_match('/^[A-Za-z0-9_.-]{1,64}$/', $error)) {
+            throw new RuntimeException("Failed to process auth code: error value is invalid");
+        }
+
+        if ($code !== null && $error !== null) {
+            throw new RuntimeException("Failed to process auth code: response contains both code and error");
+        }
+
+        if ($code === null && $error === null) {
+            throw new RuntimeException("Failed to process auth code: response is empty");
+        }
 
         return new AuthCode($state, $code, $error);
     }
