@@ -136,14 +136,25 @@ final class Client {
         return new AuthCode($state, $code, $error);
     }
 
-    public function getToken (AuthCode $code, ?string $redirect_uri = null):?AccessToken {
-        if ($code->error) return null;
+    public function getToken (AuthCode $code, ?string $redirect_uri = null):AccessToken {
+        if ($code->error !== null) {
+            throw new RuntimeException("Failed to get token: auth response contains error: {$code->error}");
+        }
+
+        if ($code->code === null || $code->code === '') {
+            throw new RuntimeException("Failed to get token: auth code is missing");
+        }
 
         $host = $this->sandbox ?
                     "https://sandbox.alfabank.ru/oidc/token" :
                     "https://baas.alfabank.ru/oidc/token";
 
         $uri = $redirect_uri ?? $this->default_redirect_uri;
+        $uri = is_string($uri) ? trim($uri) : null;
+
+        if ($uri === null || $uri === '') {
+            throw new RuntimeException("Failed to get token: redirect URI is missing");
+        }
 
         $body = http_build_query([
             "grant_type" => "authorization_code",
@@ -153,37 +164,52 @@ final class Client {
             "redirect_uri" => $uri
         ]);
 
-        $req = self::sendRequest($host, "POST", $this->certificate, $body, [
+        $response = self::sendRequest($host, "POST", $this->certificate, $body, [
             'Content-Type: application/x-www-form-urlencoded',
             'Accept: application/json'
         ]);
 
-        if ($req->error || $req->code !== 200 || !$req->data) return null;
+        if ($response->error || $response->code !== 200) {
+            throw new RuntimeException("Failed to get token: HTTP {$response->code}" . ($response->error ? " ({$response->error})" : ''), $response->code);
+        }
+            
+        if ($response->data === null || $response->data === '') {
+            throw new RuntimeException("Failed to get token: empty response");
+        }
 
         try {
-            $res = json_decode($req->data, null, 512, JSON_THROW_ON_ERROR);
-
-            if (
-                isset($res->access_token) &&
-                isset($res->refresh_token) &&
-                isset($res->token_type) &&
-                isset($res->expires_in) &&
-                isset($res->id_token)
-            ) {
-                return new AccessToken(
-                    $res->access_token,
-                    $res->refresh_token,
-                    $res->token_type,
-                    time() + $res->expires_in,
-                    $res->id_token
-                );
-            }
-
-            return null;
+            $data = json_decode($response->data, flags: JSON_THROW_ON_ERROR);
         }
-        catch (Exception $e) {
-            return null;
+        catch (JsonException $e) {
+            throw new RuntimeException("Failed to get token: invalid JSON response", 0, $e);
         }
+
+        if (
+            !is_object($data) ||
+            !isset($data->access_token, $data->refresh_token, $data->token_type, $data->expires_in, $data->id_token) ||
+            !is_string($data->access_token) || $data->access_token === '' ||
+            !is_string($data->refresh_token) || $data->refresh_token === '' ||
+            !is_string($data->token_type) || $data->token_type === '' ||
+            !is_string($data->id_token) || $data->id_token === ''
+        ) {
+            throw new RuntimeException("Failed to get token: invalid JSON structure");
+        }
+
+        $expiresIn = filter_var($data->expires_in, FILTER_VALIDATE_INT, [
+            'options' => ['min_range' => 1],
+        ]);
+
+        if ($expiresIn === false) {
+            throw new RuntimeException("Failed to get token: expires_in is invalid");
+        }
+
+        return new AccessToken(
+            $data->access_token,
+            $data->refresh_token,
+            $data->token_type,
+            time() + $expiresIn,
+            $data->id_token
+        );
     }
 
     public function refreshToken (AccessToken $token):?AccessToken {
