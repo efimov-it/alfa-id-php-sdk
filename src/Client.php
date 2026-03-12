@@ -29,7 +29,7 @@ final class Client {
             $this->client_secret = $client_secret;
         }
         else {
-            $this->client_secret = self::getSecret($client_id, $certificate, $sandbox);
+            $this->client_secret = self::getNewClientSecret($client_id, $certificate, $sandbox);
         }
     }
 
@@ -53,7 +53,7 @@ final class Client {
         return $host . "/oidc/authorize?" . $query;
     }
 
-    private static function getSecret (string $client_id, CertificateBundle $cert, bool $sandbox):string {
+    private static function getNewClientSecret (string $client_id, CertificateBundle $cert, bool $sandbox):string {
         $client_id_url = rawurlencode($client_id);
         $host = $sandbox ?
                     "https://sandbox.alfabank.ru/oidc/clients/$client_id_url/client-secret" :
@@ -81,6 +81,10 @@ final class Client {
         }
 
         return $data->clientSecret;
+    }
+
+    public function getClientSecret ():string {
+        return $this->client_secret;
     }
 
     public function processAuthCode ():AuthCode {
