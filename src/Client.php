@@ -212,48 +212,68 @@ final class Client {
         );
     }
 
-    public function refreshToken (AccessToken $token):?AccessToken {
+    public function refreshToken (AccessToken $token):AccessToken {
+        $refresh_token = trim($token->refresh_token);
+        if ($refresh_token === "") {
+            throw new RuntimeException("Failed to refresh token: refresh token is missing");
+        }
+
         $host = $this->sandbox ?
                     "https://sandbox.alfabank.ru/oidc/token" :
                     "https://baas.alfabank.ru/oidc/token";
 
         $body = http_build_query([
             "grant_type" => "refresh_token",
-            "refresh_token" => $token->refresh_token,
+            "refresh_token" => $refresh_token,
             "client_id" => $this->client_id,
             "client_secret" => $this->client_secret
         ]);
 
-        $req = self::sendRequest($host, "POST", $this->certificate, $body, [
+        $response = self::sendRequest($host, "POST", $this->certificate, $body, [
             'Content-Type: application/x-www-form-urlencoded',
             'Accept: application/json'
         ]);
 
-        if ($req->error || $req->code !== 200 || !$req->data) return null;
+        if ($response->error || $response->code !== 200) {
+            throw new RuntimeException("Failed to refresh token: HTTP {$response->code}" . ($response->error ? " ({$response->error})" : ''), $response->code);
+        }
+
+        if ($response->data === null || $response->data === '') {
+            throw new RuntimeException("Failed to refresh token: empty response");
+        }
 
         try {
-            $res = json_decode($req->data, null, 512, JSON_THROW_ON_ERROR);
-
-            if (
-                isset($res->access_token) &&
-                isset($res->refresh_token) &&
-                isset($res->token_type) &&
-                isset($res->expires_in)
-            ) {
-                return new AccessToken(
-                    $res->access_token,
-                    $res->refresh_token,
-                    $res->token_type,
-                    time() + $res->expires_in,
-                    $token->id_token
-                );
-            }
-
-            return null;
+            $data = json_decode($response->data, false, 512, JSON_THROW_ON_ERROR);
         }
-        catch (Exception $e) {
-            return null;
+        catch (JsonException $e) {
+            throw new RuntimeException("Failed to refresh token: invalid JSON response", 0, $e);
         }
+
+        if (
+            !is_object($data) ||
+            !isset($data->access_token, $data->refresh_token, $data->token_type, $data->expires_in) ||
+            !is_string($data->access_token) || $data->access_token === '' ||
+            !is_string($data->refresh_token) || $data->refresh_token === '' ||
+            !is_string($data->token_type) || $data->token_type === ''
+        ) {
+            throw new RuntimeException("Failed to refresh token: invalid JSON structure");
+        }
+
+        $expiresIn = filter_var($data->expires_in, FILTER_VALIDATE_INT, [
+            'options' => ['min_range' => 1],
+        ]);
+
+        if ($expiresIn === false) {
+            throw new RuntimeException("Failed to refresh token: expires_in is invalid");
+        }
+
+        return new AccessToken(
+            $data->access_token,
+            $data->refresh_token,
+            $data->token_type,
+            time() + $expiresIn,
+            $token->id_token
+        );
     }
 
     public function getUserInfo (AccessToken $token):AlfaUser|null {
