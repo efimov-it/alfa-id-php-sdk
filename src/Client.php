@@ -9,7 +9,6 @@ use AlfaID\Domain\DTO\ApiResponseWrapper;
 use AlfaID\Domain\DTO\AuthCode;
 use AlfaID\Infrastructure\Http\Tls\CertificateBundle;
 
-use Exception;
 use JsonException;
 use RuntimeException;
 
@@ -276,53 +275,72 @@ final class Client {
         );
     }
 
-    public function getUserInfo (AccessToken $token):AlfaUser|null {
+    public function getUserInfo (AccessToken $token):AlfaUser {
+        $access_token = trim($token->access_token);
+        if ($access_token === "") {
+            throw new RuntimeException("Failed to get user info: access_token is missing");
+        }
+
         $host = $this->sandbox ? "https://sandbox.alfabank.ru/oidc/userinfo" : "https://baas.alfabank.ru/oidc/userinfo";
 
-        $req = self::sendRequest($host, "GET", $this->certificate, null, [
-            "Authorization: Bearer $token->access_token",
+        $response = self::sendRequest($host, "GET", $this->certificate, null, [
+            "Authorization: Bearer $access_token",
             "Accept: application/jwt"
         ]);
 
-        if ($req->error || $req->code !== 200 || !$req->data) return null;
+        if ($response->error || $response->code !== 200) {
+            throw new RuntimeException("Failed to get user info: HTTP {$response->code}" . ($response->error ? " ({$response->error})" : ''), $response->code);
+        }
 
-        $data = explode(".", $req->data);
+        if ($response->data === null || $response->data === "") {
+            throw new RuntimeException("Failed to get user info: empty response");
+        }
 
-        if (count($data) !== 3) return null;
+        $data = explode(".", $response->data);
+
+        if (count($data) !== 3) {
+            throw new RuntimeException("Failed to get user info: invalid response structure");
+        }
+
+        $decodedData = strtr($data[1], '-_', '+/');
+        $pad = strlen($decodedData) % 4;
+        if ($pad) $decodedData .= str_repeat('=', 4 - $pad);
+        $decodedData = base64_decode($decodedData, true);
+        
+        if ($decodedData === false) {
+            throw new RuntimeException("Failed to get user info: can't decode response payload");
+        }
 
         try {
-            $decodedData = strtr($data[1], '-_', '+/');
-            $pad = strlen($decodedData) % 4;
-            if ($pad) $decodedData .= str_repeat('=', 4 - $pad);
-            $decodedData = base64_decode($decodedData, true);
-            if ($decodedData === false) return null;
-            
-            $userData = json_decode($decodedData, null, 512, JSON_THROW_ON_ERROR);
-
-            if (
-                !isset($userData->given_name) ||
-                !isset($userData->family_name) ||
-                !isset($userData->phone_number)
-            ) {
-                return null;
-            }
-
-            return new AlfaUser(
-                $userData->given_name,
-                $userData->family_name,
-                $userData->middle_name,
-                $userData->email,
-                $userData->gender,
-                $userData->birthdate,
-                $userData->phone_number,
-                $userData->citizenship,
-                $userData->package_name,
-                $userData->package_code
-            );
+            $userData = json_decode($decodedData, false, 512, JSON_THROW_ON_ERROR);
         }
-        catch (Exception $e) {
-            return null;
+        catch (JsonException $e) {
+            throw new RuntimeException("Failed to get user info: invalid JSON payload", 0, $e);
         }
+
+
+        if (
+            !is_object($userData) ||
+            !isset($userData->given_name, $userData->family_name, $userData->phone_number) ||
+            !is_string($userData->given_name) || $userData->given_name === "" ||
+            !is_string($userData->family_name) || $userData->family_name === "" ||
+            !is_string($userData->phone_number) || $userData->phone_number === ""
+        ) {
+            throw new RuntimeException("Failed to get user info: invalid JSON structure");
+        }
+
+        return new AlfaUser(
+            $userData->given_name,
+            $userData->family_name,
+            $userData->middle_name ?? null,
+            $userData->email ?? null,
+            $userData->gender ?? null,
+            $userData->birthdate ?? null,
+            $userData->phone_number,
+            $userData->citizenship ?? null,
+            $userData->package_name ?? null,
+            $userData->package_code ?? null
+        );
     }
 
     private static function sendRequest (
