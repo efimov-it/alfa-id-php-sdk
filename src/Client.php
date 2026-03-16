@@ -29,7 +29,12 @@ final class Client {
             $this->client_secret = $client_secret;
         }
         else {
-            $this->client_secret = self::getNewClientSecret($client_id, $security_bundle, $sandbox);
+            try {
+                $this->client_secret = self::getNewClientSecret($client_id, $security_bundle, $sandbox);
+            } 
+            catch (Exception $e) {
+                throw new RuntimeException("Failed to initialize Alfa ID instance: " . $e->getMessage(), 0, $e);
+            }
         }
     }
 
@@ -62,22 +67,22 @@ final class Client {
         $response = self::sendRequest($host, "POST", $security_bundle, null, ['Accept: application/json']);
 
         if ($response->error || $response->code !== 200) {
-            throw new RuntimeException("Can't get the client's secret: HTTP {$response->code}" . ($response->error ? " ({$response->error})" : ''), $response->code);
+            throw new RuntimeException("Failed to get the client's secret: HTTP {$response->code}" . ($response->error ? " ({$response->error})" : ''), $response->code);
         }
 
         if ($response->data === null || $response->data === '') {
-            throw new RuntimeException("Can't get the client's secret: empty response");
+            throw new RuntimeException("Failed to get the client's secret: empty response");
         }
 
         try {
             $data = json_decode($response->data, flags: JSON_THROW_ON_ERROR);
         }
         catch (JsonException $e) {
-            throw new RuntimeException("Can't get the client's secret: invalid JSON response", 0, $e);
+            throw new RuntimeException("Failed to get the client's secret: invalid JSON response", 0, $e);
         }
 
         if (!is_object($data) || !isset($data->clientSecret) || !is_string($data->clientSecret) || trim($data->clientSecret) === '') {
-            throw new RuntimeException("Can't get the client's secret: invalid response structure");
+            throw new RuntimeException("Failed to get the client's secret: invalid response structure");
         }
 
         return $data->clientSecret;
