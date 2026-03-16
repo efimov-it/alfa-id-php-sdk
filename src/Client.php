@@ -7,8 +7,8 @@ use AlfaID\Domain\DTO\AccessToken;
 use AlfaID\Domain\DTO\AlfaUser;
 use AlfaID\Domain\DTO\ApiResponseWrapper;
 use AlfaID\Domain\DTO\AuthCode;
-use AlfaID\Infrastructure\Http\Tls\CertificateBundle;
-
+use AlfaID\Infrastructure\Http\Tls\SecurityBundle;
+use Exception;
 use JsonException;
 use RuntimeException;
 
@@ -16,20 +16,20 @@ final class Client {
     private string $client_id;
     private string $client_secret;
     private string $default_redirect_uri;
-    private CertificateBundle $certificate;
+    private SecurityBundle $security_bundle;
     private bool $sandbox;
 
-    public function __construct(string $client_id, string $default_redirect_uri, CertificateBundle $certificate, ?string $client_secret = null, bool $sandbox = true) {
+    public function __construct(string $client_id, string $default_redirect_uri, SecurityBundle $security_bundle, ?string $client_secret = null, bool $sandbox = true) {
         $this->client_id = $client_id;
         $this->default_redirect_uri = $default_redirect_uri;
-        $this->certificate = $certificate;
+        $this->security_bundle = $security_bundle;
         $this->sandbox = $sandbox;
 
         if ($client_secret) {
             $this->client_secret = $client_secret;
         }
         else {
-            $this->client_secret = self::getNewClientSecret($client_id, $certificate, $sandbox);
+            $this->client_secret = self::getNewClientSecret($client_id, $security_bundle, $sandbox);
         }
     }
 
@@ -53,13 +53,13 @@ final class Client {
         return $host . "/oidc/authorize?" . $query;
     }
 
-    private static function getNewClientSecret (string $client_id, CertificateBundle $cert, bool $sandbox):string {
+    private static function getNewClientSecret (string $client_id, SecurityBundle $security_bundle, bool $sandbox):string {
         $client_id_url = rawurlencode($client_id);
         $host = $sandbox ?
                     "https://sandbox.alfabank.ru/oidc/clients/$client_id_url/client-secret" :
                     "https://baas.alfabank.ru/oidc/clients/$client_id_url/client-secret";
 
-        $response = self::sendRequest($host, "POST", $cert, null, ['Accept: application/json']);
+        $response = self::sendRequest($host, "POST", $security_bundle, null, ['Accept: application/json']);
 
         if ($response->error || $response->code !== 200) {
             throw new RuntimeException("Can't get the client's secret: HTTP {$response->code}" . ($response->error ? " ({$response->error})" : ''), $response->code);
@@ -167,7 +167,7 @@ final class Client {
             "redirect_uri" => $uri
         ]);
 
-        $response = self::sendRequest($host, "POST", $this->certificate, $body, [
+        $response = self::sendRequest($host, "POST", $this->security_bundle, $body, [
             'Content-Type: application/x-www-form-urlencoded',
             'Accept: application/json'
         ]);
@@ -232,7 +232,7 @@ final class Client {
             "client_secret" => $this->client_secret
         ]);
 
-        $response = self::sendRequest($host, "POST", $this->certificate, $body, [
+        $response = self::sendRequest($host, "POST", $this->security_bundle, $body, [
             'Content-Type: application/x-www-form-urlencoded',
             'Accept: application/json'
         ]);
@@ -287,7 +287,7 @@ final class Client {
 
         $host = $this->sandbox ? "https://sandbox.alfabank.ru/oidc/userinfo" : "https://baas.alfabank.ru/oidc/userinfo";
 
-        $response = self::sendRequest($host, "GET", $this->certificate, null, [
+        $response = self::sendRequest($host, "GET", $this->security_bundle, null, [
             "Authorization: Bearer $access_token",
             "Accept: application/jwt"
         ]);
@@ -300,28 +300,12 @@ final class Client {
             throw new RuntimeException("Failed to get user info: empty response");
         }
 
-        $data = explode(".", $response->data);
-
-        if (count($data) !== 3) {
-            throw new RuntimeException("Failed to get user info: invalid response structure");
-        }
-
-        $decodedData = strtr($data[1], '-_', '+/');
-        $pad = strlen($decodedData) % 4;
-        if ($pad) $decodedData .= str_repeat('=', 4 - $pad);
-        $decodedData = base64_decode($decodedData, true);
-        
-        if ($decodedData === false) {
-            throw new RuntimeException("Failed to get user info: can't decode response payload");
-        }
-
         try {
-            $userData = json_decode($decodedData, false, 512, JSON_THROW_ON_ERROR);
+            $userData = $this->verifyJwtRs256($response->data);
         }
-        catch (JsonException $e) {
-            throw new RuntimeException("Failed to get user info: invalid JSON payload", 0, $e);
+        catch (Exception $e) {
+            throw new RuntimeException("Failed to get user info: " . $e->getMessage(), 0, $e);
         }
-
 
         if (
             !is_object($userData) ||
@@ -350,7 +334,7 @@ final class Client {
     private static function sendRequest (
         string $host,
         string $method = "GET",
-        ?CertificateBundle $certificate = null,
+        ?SecurityBundle $security_bundle = null,
         $body = null,
         ?array $headers = null,
         int $timeout = 10
@@ -378,14 +362,14 @@ final class Client {
             $curl_opt[CURLOPT_POSTFIELDS] = $body;
         }
 
-        if ($certificate) {
-            $curl_opt[CURLOPT_SSLCERT]        = $certificate->file_path;
-            $curl_opt[CURLOPT_SSLKEY]         = $certificate->secret_file_path;
+        if ($security_bundle) {
+            $curl_opt[CURLOPT_SSLCERT]        = $security_bundle->certificate_file_path;
+            $curl_opt[CURLOPT_SSLKEY]         = $security_bundle->certificate_secret_file_path;
             $curl_opt[CURLOPT_SSL_VERIFYPEER] = true;
             $curl_opt[CURLOPT_SSL_VERIFYHOST] = 2;
 
-            if ($certificate->chain_file_path) $curl_opt[CURLOPT_CAINFO] = $certificate->chain_file_path;
-            if ($certificate->pass) $curl_opt[CURLOPT_KEYPASSWD] = $certificate->pass;
+            if ($security_bundle->certificate_chain_file_path) $curl_opt[CURLOPT_CAINFO] = $security_bundle->certificate_chain_file_path;
+            if ($security_bundle->certificate_pass) $curl_opt[CURLOPT_KEYPASSWD] = $security_bundle->certificate_pass;
         }
 
         curl_setopt_array($ch, $curl_opt);
@@ -402,5 +386,64 @@ final class Client {
             $err !== '' ? $err : null,
             $errno
         );
+    }
+
+    private static function b64url_decode_str(string $value): string {
+        $value = strtr($value, '-_', '+/');
+        $pad = strlen($value) % 4;
+        if ($pad !== 0) {
+            $value .= str_repeat('=', 4 - $pad);
+        }
+
+        $decoded = base64_decode($value, true);
+        if ($decoded === false) {
+            throw new RuntimeException('Invalid base64url data');
+        }
+
+        return $decoded;
+    }
+
+    private function verifyJwtRs256(string $jwt): object {
+        $parts = explode('.', $jwt);
+        if (count($parts) !== 3) {
+            throw new RuntimeException('Invalid JWT compact serialization');
+        }
+
+        [$encodedHeader, $encodedPayload, $encodedSignature] = $parts;
+
+        $headerJson = self::b64url_decode_str($encodedHeader);
+        $header = json_decode($headerJson, false, 512, JSON_THROW_ON_ERROR);
+
+        if (!is_object($header) || !isset($header->alg) || !is_string($header->alg)) {
+            throw new RuntimeException('JWT header is invalid');
+        }
+
+        if ($header->alg !== 'RS256') {
+            throw new RuntimeException('Unexpected JWT alg');
+        }
+
+        $signature = self::b64url_decode_str($encodedSignature);
+
+        $signingInput = $encodedHeader . '.' . $encodedPayload;
+
+        $ok = openssl_verify(
+            $signingInput,
+            $signature,
+            $this->security_bundle->signature,
+            OPENSSL_ALGO_SHA256
+        );
+
+        if ($ok !== 1) {
+            throw new RuntimeException('JWT signature verification failed');
+        }
+
+        $payloadJson = self::b64url_decode_str($encodedPayload);
+        $payload = json_decode($payloadJson, false, 512, JSON_THROW_ON_ERROR);
+
+        if (!is_object($payload)) {
+            throw new RuntimeException('JWT payload is invalid');
+        }
+
+        return $payload;
     }
 }
